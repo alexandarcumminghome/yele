@@ -29,6 +29,45 @@ Notes
   since captions are effectively infinite in variety.
 """
 
+"""
+bot.py — Inline "Ye le depo" meme sticker bot (aiogram 3.x)
+
+How it works
+------------
+Telegram's inline mode (answer_inline_query) needs each result to point
+at either a public asset URL or a `file_id` already known to Telegram.
+Since we generate a *new* image per query, we can't use a URL — so we
+upload the freshly rendered PNG to a private "cache" chat via
+bot.send_sticker(), grab the sticker file_id Telegram gives back, and
+hand that to InlineQueryResultCachedSticker. This is the standard
+pattern for dynamic-content inline sticker bots.
+
+Note: a *sticker* file_id (from send_sticker) is a different object
+type from a *photo* file_id (from send_photo) — InlineQueryResult
+CachedSticker only accepts the former, which is why results must be
+uploaded as stickers, not photos.
+
+Setup
+-----
+1. Create a private Telegram channel (or just use Saved Messages / any
+   chat the bot is in) to act as the cache store. Add the bot as admin.
+2. Put the numeric chat id in CACHE_CHAT_ID below (or env var).
+3. pip install aiogram==3.28.0 pillow
+4. Set BOT_TOKEN env var (from BotFather) and run: python3 bot.py
+
+Notes
+-----
+- A small LRU-ish in-memory cache maps text -> file_id so repeated
+  queries for the same caption don't re-upload every time.
+- inline_query.answer has a ~10s budget from Telegram before the query
+  is considered stale, so we cap generation/upload time and results.
+- cache_time=1 keeps Telegram from over-caching results client-side
+  since captions are effectively infinite in variety.
+- Telegram requires static stickers to be PNG/WEBP with one side
+  exactly 512px and the other <=512px; our 512x512 RGBA template
+  satisfies that as-is.
+"""
+
 import asyncio
 import hashlib
 import logging
@@ -36,12 +75,12 @@ import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import (
+    BufferedInputFile,
     InlineQuery,
-    InlineQueryResultCachedPhoto,
+    InlineQueryResultCachedSticker,
     InlineQueryResultArticle,
     InputTextMessageContent,
 )
-from aiogram.enums import ParseMode
 
 from generator import render_sticker, FONT_PATH
 
@@ -49,9 +88,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("depo_bot")
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-# Chat where generated images get uploaded so Telegram issues a file_id
-# we can reuse in inline results. Use a private channel/group the bot
-# is a member+admin of. Example: -1001234567890
+# Chat where generated images get uploaded so Telegram issues a
+# sticker file_id we can reuse in inline results. Use a private
+# channel/group the bot is a member+admin of. Example: -1001234567890
 CACHE_CHAT_ID = int(os.environ.get("CACHE_CHAT_ID", "0"))
 
 DEFAULT_TEXT = "Ye le depo"
@@ -60,8 +99,8 @@ MAX_INPUT_LEN = 120  # guard against absurd inputs
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# text -> telegram file_id, so repeat captions are instant and don't
-# re-upload to the cache chat every time.
+# text -> telegram sticker file_id, so repeat captions are instant and
+# don't re-upload to the cache chat every time.
 _file_id_cache: dict[str, str] = {}
 
 
@@ -75,11 +114,9 @@ async def _get_or_create_file_id(text: str) -> str:
         return _file_id_cache[key]
 
     png_bytes = render_sticker(text)
-    from aiogram.types import BufferedInputFile
-
-    photo = BufferedInputFile(png_bytes, filename="depo.png")
-    msg = await bot.send_photo(chat_id=CACHE_CHAT_ID, photo=photo)
-    file_id = msg.photo[-1].file_id
+    sticker_file = BufferedInputFile(png_bytes, filename="depo.png")
+    msg = await bot.send_sticker(chat_id=CACHE_CHAT_ID, sticker=sticker_file)
+    file_id = msg.sticker.file_id
     _file_id_cache[key] = file_id
     return file_id
 
@@ -91,9 +128,9 @@ async def handle_inline(query: InlineQuery):
 
     try:
         file_id = await _get_or_create_file_id(text)
-        result = InlineQueryResultCachedPhoto(
+        result = InlineQueryResultCachedSticker(
             id=_cache_key(text)[:64],
-            photo_file_id=file_id,
+            sticker_file_id=file_id,
         )
         await query.answer([result], cache_time=1, is_personal=False)
     except Exception:
