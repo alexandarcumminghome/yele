@@ -10,9 +10,23 @@ to two lines and auto-shrinking the font so it always fits.
 
 from PIL import Image, ImageDraw, ImageFont
 import io
+import os
 
-TEMPLATE_PATH = "template.png"
-FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATE_PATH = os.path.join(BASE_DIR, "template.png")
+
+# Bundled in the repo (fonts/DejaVuSans-Bold.ttf) so rendering doesn't
+# depend on whatever fonts happen to be installed on the host. We still
+# fall back to a few common system paths, and finally to PIL's built-in
+# bitmap font, so the bot degrades gracefully instead of crashing.
+_FONT_CANDIDATES = [
+    os.path.join(BASE_DIR, "fonts", "DejaVuSans-Bold.ttf"),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "C:\\Windows\\Fonts\\arialbd.ttf",
+]
+FONT_PATH = next((p for p in _FONT_CANDIDATES if os.path.isfile(p)), None)
 
 # Box geometry measured from the template (x0, y0, x1, y1)
 BOX = (40, 378, 466, 497)
@@ -27,8 +41,15 @@ MIN_FONT_SIZE = 22
 LINE_SPACING = 6
 
 
-def _load_font(size: int) -> ImageFont.FreeTypeFont:
-    return ImageFont.truetype(FONT_PATH, size)
+def _load_font(size: int) -> ImageFont.ImageFont:
+    if FONT_PATH:
+        try:
+            return ImageFont.truetype(FONT_PATH, size)
+        except OSError:
+            pass
+    # Last-resort fallback so a missing font file never crashes a render;
+    # this won't scale with `size` but at least produces output.
+    return ImageFont.load_default()
 
 
 def _wrap_to_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int):

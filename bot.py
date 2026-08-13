@@ -43,7 +43,7 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 
-from generator import render_sticker
+from generator import render_sticker, FONT_PATH
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("depo_bot")
@@ -114,6 +114,13 @@ async def main():
         raise RuntimeError(
             "Set CACHE_CHAT_ID to a chat/channel id the bot can post images into "
             "(used to obtain file_ids for inline results)."
+        )
+    if not FONT_PATH:
+        logger.warning(
+            "No usable font file found (checked bundled fonts/ dir and common "
+            "system paths). Falling back to PIL's default bitmap font, which "
+            "won't scale/wrap properly. Make sure fonts/DejaVuSans-Bold.ttf "
+            "shipped with the repo."
         )
     await dp.start_polling(bot)
 
