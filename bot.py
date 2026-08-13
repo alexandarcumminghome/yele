@@ -4,37 +4,6 @@ bot.py — Inline "Ye le depo" meme sticker bot (aiogram 3.x)
 How it works
 ------------
 Telegram's inline mode (answer_inline_query) needs each result to point
-at either a public image URL or a `file_id` already known to Telegram.
-Since we generate a *new* image per query, we can't use a URL (would
-need public hosting) — so we upload the freshly rendered PNG to a
-private "cache" chat via bot.send_photo(), grab the file_id Telegram
-gives back, and hand that to InlineQueryResultCachedPhoto. This is the
-standard pattern for dynamic-content inline bots.
-
-Setup
------
-1. Create a private Telegram channel (or just use Saved Messages / any
-   chat the bot is in) to act as the cache store. Add the bot as admin.
-2. Put the numeric chat id in CACHE_CHAT_ID below (or env var).
-3. pip install aiogram==3.28.0 pillow
-4. Set BOT_TOKEN env var (from BotFather) and run: python3 bot.py
-
-Notes
------
-- A small LRU-ish in-memory cache maps text -> file_id so repeated
-  queries for the same caption don't re-upload every time.
-- inline_query.answer has a ~10s budget from Telegram before the query
-  is considered stale, so we cap generation/upload time and results.
-- cache_time=1 keeps Telegram from over-caching results client-side
-  since captions are effectively infinite in variety.
-"""
-
-"""
-bot.py — Inline "Ye le depo" meme sticker bot (aiogram 3.x)
-
-How it works
-------------
-Telegram's inline mode (answer_inline_query) needs each result to point
 at either a public asset URL or a `file_id` already known to Telegram.
 Since we generate a *new* image per query, we can't use a URL — so we
 upload the freshly rendered PNG to a private "cache" chat via
@@ -74,12 +43,16 @@ import logging
 import os
 
 from aiogram import Bot, Dispatcher
+from aiogram.filters import CommandStart
 from aiogram.types import (
     BufferedInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     InlineQuery,
     InlineQueryResultCachedSticker,
     InlineQueryResultArticle,
     InputTextMessageContent,
+    Message,
 )
 
 from generator import render_sticker, FONT_PATH
@@ -93,6 +66,7 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 # channel/group the bot is a member+admin of. Example: -1001234567890
 CACHE_CHAT_ID = int(os.environ.get("CACHE_CHAT_ID", "0"))
 
+BOT_USERNAME = "KFCFBOT"
 DEFAULT_TEXT = "Ye le depo"
 MAX_INPUT_LEN = 120  # guard against absurd inputs
 
@@ -106,6 +80,33 @@ _file_id_cache: dict[str, str] = {}
 
 def _cache_key(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+@dp.message(CommandStart())
+async def start_handler(message: Message):
+    text = (
+        "👋 <b>Welcome!</b>\n\n"
+        "I turn any line of text into a \"Ye le depo\" sticker — no need "
+        "to add me to a chat, just use me <b>inline</b>, anywhere.\n\n"
+        "<b>How to use me:</b>\n"
+        f"1. In <b>any</b> chat, type <code>@{BOT_USERNAME}</code> followed by a space\n"
+        "2. Add your text, e.g. <code>ye le pakad</code>\n"
+        "3. Tap the sticker that pops up to send it\n\n"
+        "Long text automatically wraps to two lines. Leave the text blank "
+        f"and I'll use the default \"{DEFAULT_TEXT}\" caption.\n\n"
+        "👇 Try it right now:"
+    )
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✨ Try it now",
+                    switch_inline_query_current_chat="ye le pakad",
+                )
+            ]
+        ]
+    )
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 async def _get_or_create_file_id(text: str) -> str:
