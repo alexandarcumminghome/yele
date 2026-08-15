@@ -40,6 +40,8 @@ MAX_FONT_SIZE = 64
 MIN_FONT_SIZE = 22
 LINE_SPACING = 6
 
+DEFAULT_TEXT = "Hankie OP"
+
 
 def _load_font(size: int) -> ImageFont.ImageFont:
     if FONT_PATH:
@@ -105,7 +107,7 @@ def render_sticker(text: str) -> bytes:
     max_width = (x1 - x0) - 2 * PADDING_X
     max_height = (y1 - y0) - 2 * PADDING_Y
 
-    text = text.strip() or "Ye le depo"
+    text = text.strip() or DEFAULT_TEXT
     font, lines = _fit_text(draw, text, max_width, max_height)
 
     line_height = draw.textbbox((0, 0), "Ag", font=font)[3]

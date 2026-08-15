@@ -49,7 +49,7 @@ FONT_STEP = 4
 LINE_PITCH_MULT = 1.18  # spacing between baselines relative to font size
 
 TEXT_COLOR = NVector(0.07, 0.07, 0.07)
-DEFAULT_TEXT = "Hoted"
+DEFAULT_TEXT = "Hankie OP"
 
 _renderer = None
 

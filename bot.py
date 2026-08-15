@@ -55,7 +55,7 @@ from aiogram.types import (
     Message,
 )
 
-from generator import render_sticker, FONT_PATH
+from generator import render_sticker, FONT_PATH, DEFAULT_TEXT
 from generator_tgs import render_tgs_sticker
 
 logging.basicConfig(level=logging.INFO)
@@ -68,7 +68,6 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 CACHE_CHAT_ID = int(os.environ.get("CACHE_CHAT_ID", "0"))
 
 BOT_USERNAME = "KFCFBOT"
-DEFAULT_TEXT = "Ye le depo"
 MAX_INPUT_LEN = 120  # guard against absurd inputs
 
 bot = Bot(token=BOT_TOKEN)
