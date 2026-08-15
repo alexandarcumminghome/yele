@@ -4,3 +4,8 @@ __pycache__/
 *.png
 !template.png
 !fonts/*.ttf
+ecosystem.config.js
+logs/
+*.tgs
+!template_pepe.tgs
+tgs_work/

@@ -56,6 +56,7 @@ from aiogram.types import (
 )
 
 from generator import render_sticker, FONT_PATH
+from generator_tgs import render_tgs_sticker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("depo_bot")
@@ -78,22 +79,23 @@ dp = Dispatcher()
 _file_id_cache: dict[str, str] = {}
 
 
-def _cache_key(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def _cache_key(template_id: str, text: str) -> str:
+    return hashlib.sha256(f"{template_id}:{text}".encode("utf-8")).hexdigest()
 
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     text = (
         "👋 <b>Welcome!</b>\n\n"
-        "I turn any line of text into a \"Ye le depo\" sticker — no need "
-        "to add me to a chat, just use me <b>inline</b>, anywhere.\n\n"
+        "I turn any line of text into a sticker — no need to add me to a "
+        "chat, just use me <b>inline</b>, anywhere.\n\n"
         "<b>How to use me:</b>\n"
         f"1. In <b>any</b> chat, type <code>@{BOT_USERNAME}</code> followed by a space\n"
         "2. Add your text, e.g. <code>ye le pakad</code>\n"
-        "3. Tap the sticker that pops up to send it\n\n"
-        "Long text automatically wraps to two lines. Leave the text blank "
-        f"and I'll use the default \"{DEFAULT_TEXT}\" caption.\n\n"
+        "3. I'll show you two versions — a classic photo sticker and an "
+        "animated one — tap whichever you like to send it\n\n"
+        "Long text automatically wraps to multiple lines. Leave the text "
+        f"blank and I'll use the default \"{DEFAULT_TEXT}\" caption.\n\n"
         "👇 Try it right now:"
     )
     keyboard = InlineKeyboardMarkup(
@@ -109,13 +111,12 @@ async def start_handler(message: Message):
     await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
-async def _get_or_create_file_id(text: str) -> str:
-    key = _cache_key(text)
+async def _get_or_create_file_id(template_id: str, text: str, png_or_tgs_bytes: bytes, filename: str) -> str:
+    key = _cache_key(template_id, text)
     if key in _file_id_cache:
         return _file_id_cache[key]
 
-    png_bytes = render_sticker(text)
-    sticker_file = BufferedInputFile(png_bytes, filename="depo.png")
+    sticker_file = BufferedInputFile(png_or_tgs_bytes, filename=filename)
     msg = await bot.send_sticker(chat_id=CACHE_CHAT_ID, sticker=sticker_file)
     file_id = msg.sticker.file_id
     _file_id_cache[key] = file_id
@@ -127,15 +128,35 @@ async def handle_inline(query: InlineQuery):
     raw_text = query.query.strip()
     text = (raw_text or DEFAULT_TEXT)[:MAX_INPUT_LEN]
 
+    results = []
+
     try:
-        file_id = await _get_or_create_file_id(text)
-        result = InlineQueryResultCachedSticker(
-            id=_cache_key(text)[:64],
-            sticker_file_id=file_id,
+        png_bytes = render_sticker(text)
+        file_id = await _get_or_create_file_id("static", text, png_bytes, "depo.png")
+        results.append(
+            InlineQueryResultCachedSticker(
+                id=_cache_key("static", text)[:64],
+                sticker_file_id=file_id,
+            )
         )
-        await query.answer([result], cache_time=1, is_personal=False)
     except Exception:
-        logger.exception("failed to build inline result for %r", text)
+        logger.exception("failed to build static result for %r", text)
+
+    try:
+        tgs_bytes = render_tgs_sticker(text)
+        file_id = await _get_or_create_file_id("animated", text, tgs_bytes, "depo.tgs")
+        results.append(
+            InlineQueryResultCachedSticker(
+                id=_cache_key("animated", text)[:64],
+                sticker_file_id=file_id,
+            )
+        )
+    except Exception:
+        logger.exception("failed to build animated result for %r", text)
+
+    if results:
+        await query.answer(results, cache_time=1, is_personal=False)
+    else:
         fallback = InlineQueryResultArticle(
             id="error",
             title="Couldn't generate sticker",
