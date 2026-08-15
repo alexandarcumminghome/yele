@@ -28,6 +28,14 @@ Notes
 -----
 - A small LRU-ish in-memory cache maps text -> file_id so repeated
   queries for the same caption don't re-upload every time.
+- Queries are debounced per-user (DEBOUNCE_SECONDS) before any
+  render/upload work happens, so fast typing ("one keystroke = one
+  inline query") doesn't translate into "one keystroke = one upload".
+  Telegram's flood limit on SendSticker for a single chat is strict
+  enough that without this, typing more than a few characters quickly
+  reliably triggers TelegramRetryAfter and silently drops results.
+- Static and animated results are built concurrently (asyncio.gather)
+  per query to keep total handler latency down.
 - inline_query.answer has a ~10s budget from Telegram before the query
   is considered stale, so we cap generation/upload time and results.
 - cache_time=1 keeps Telegram from over-caching results client-side
@@ -43,6 +51,7 @@ import logging
 import os
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import CommandStart
 from aiogram.types import (
     BufferedInputFile,
@@ -70,12 +79,24 @@ CACHE_CHAT_ID = int(os.environ.get("CACHE_CHAT_ID", "0"))
 BOT_USERNAME = "KFCFBOT"
 MAX_INPUT_LEN = 120  # guard against absurd inputs
 
+# How long to wait after an inline query arrives before actually doing
+# the (expensive) render+upload work. If a newer query from the same
+# user shows up before this elapses, the earlier one is abandoned.
+# Without this, someone typing "anonhawk mere lun pe" fires a fresh
+# render+upload *per keystroke*, which blows straight through
+# Telegram's per-chat flood limit on SendSticker within a couple of
+# seconds (see aiogram.exceptions.TelegramRetryAfter in the logs).
+DEBOUNCE_SECONDS = 0.45
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # text -> telegram sticker file_id, so repeat captions are instant and
 # don't re-upload to the cache chat every time.
 _file_id_cache: dict[str, str] = {}
+
+# user_id -> last query text seen, used for debouncing (see above).
+_latest_query_text: dict[int, str] = {}
 
 
 def _cache_key(template_id: str, text: str) -> str:
@@ -122,36 +143,57 @@ async def _get_or_create_file_id(template_id: str, text: str, png_or_tgs_bytes: 
     return file_id
 
 
+async def _build_static_result(text: str):
+    png_bytes = render_sticker(text)
+    file_id = await _get_or_create_file_id("static", text, png_bytes, "depo.png")
+    return InlineQueryResultCachedSticker(
+        id=_cache_key("static", text)[:64],
+        sticker_file_id=file_id,
+    )
+
+
+async def _build_animated_result(text: str):
+    tgs_bytes = render_tgs_sticker(text)
+    file_id = await _get_or_create_file_id("animated", text, tgs_bytes, "depo.tgs")
+    return InlineQueryResultCachedSticker(
+        id=_cache_key("animated", text)[:64],
+        sticker_file_id=file_id,
+    )
+
+
 @dp.inline_query()
 async def handle_inline(query: InlineQuery):
     raw_text = query.query.strip()
     text = (raw_text or DEFAULT_TEXT)[:MAX_INPUT_LEN]
 
+    # Debounce: record this as the latest query for this user, wait a
+    # beat, then bail out silently if a newer one has already
+    # superseded it. Cuts render+upload calls from "one per keystroke"
+    # to "one per pause in typing".
+    user_id = query.from_user.id
+    _latest_query_text[user_id] = text
+    await asyncio.sleep(DEBOUNCE_SECONDS)
+    if _latest_query_text.get(user_id) != text:
+        return
+
     results = []
-
-    try:
-        png_bytes = render_sticker(text)
-        file_id = await _get_or_create_file_id("static", text, png_bytes, "depo.png")
-        results.append(
-            InlineQueryResultCachedSticker(
-                id=_cache_key("static", text)[:64],
-                sticker_file_id=file_id,
+    outcomes = await asyncio.gather(
+        _build_static_result(text),
+        _build_animated_result(text),
+        return_exceptions=True,
+    )
+    for outcome in outcomes:
+        if isinstance(outcome, TelegramRetryAfter):
+            logger.warning(
+                "flood control hit while building a result for %r, retry_after=%s "
+                "— skipping this result for this query (debounce should prevent "
+                "this under normal typing)",
+                text, outcome.retry_after,
             )
-        )
-    except Exception:
-        logger.exception("failed to build static result for %r", text)
-
-    try:
-        tgs_bytes = render_tgs_sticker(text)
-        file_id = await _get_or_create_file_id("animated", text, tgs_bytes, "depo.tgs")
-        results.append(
-            InlineQueryResultCachedSticker(
-                id=_cache_key("animated", text)[:64],
-                sticker_file_id=file_id,
-            )
-        )
-    except Exception:
-        logger.exception("failed to build animated result for %r", text)
+        elif isinstance(outcome, Exception):
+            logger.error("failed to build a result for %r: %r", text, outcome)
+        else:
+            results.append(outcome)
 
     if results:
         await query.answer(results, cache_time=1, is_personal=False)
@@ -159,7 +201,7 @@ async def handle_inline(query: InlineQuery):
         fallback = InlineQueryResultArticle(
             id="error",
             title="Couldn't generate sticker",
-            description="Try again with shorter text",
+            description="Try again in a moment",
             input_message_content=InputTextMessageContent(
                 message_text="⚠️ Couldn't generate that one, try again."
             ),
